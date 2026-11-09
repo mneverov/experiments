@@ -216,6 +216,9 @@ Findings:
 
 Not verified or not covered:
 
+- Kubelet eviction. On a real node the kubelet evicts pods that use more than their request once node memory
+  runs low, often before the kernel OOM-kills anything. kind's kubelet sees the host's RAM, so eviction never
+  triggered here; the pod over its request is the one that goes either way.
 - Swap. Pods run with `memory.swap.max=0` (kubelet `NoSwap`). With `LimitedSwap`, retained heap pages would
   be swapped instead of OOM-killed.
 - The `alloc` mode ran once, at one rate (20 MiB/s). The release delay is about the time to allocate
@@ -223,3 +226,29 @@ Not verified or not covered:
   the idle case's 2–3.5 min.
 - Two samples per run. The default timing depends on where the 2-minute periodic GC falls relative to
   the spike end: 170s and 210s for default, 120s for gomemlimit-800, about 240s in the local run.
+
+## Requests and limits for Go pods
+
+`request` < `limit` (Burstable QoS) works for Go apps only if all of these hold:
+
+1. **The app returns the spike quickly.** A busy app does so with default settings (10–20s here). An app
+   that goes idle after a spike needs `debug.FreeOSMemory()` when the spike ends, or it holds the memory
+   for minutes.
+2. **Spikes on a node do not overlap.** Every OOM kill here came from two spikes, or a spike plus memory not
+   yet returned, on the same node. Replicas of one service behind a load balancer usually spike together.
+3. **The node has room for the spike above the requests.** The scheduler places pods by requests only:
+   with 250Mi requests it would put four of these apps on the 1200 MiB node, not two. Four at base
+   (4 × ~215 MiB) plus one spike (+600 MiB) exceed the node even if every app returns memory perfectly.
+   Nothing reserves that headroom; you rely on spikes staying rare and uncorrelated.
+
+If they hold:
+
+- `request`: steady-state RSS including garbage, about twice the live heap with `GOGC=100` (the `alloc` app:
+  100 MiB live, ~215 MiB RSS).
+- `limit`: spike peak plus a margin.
+- `GOMEMLIMIT`: about 90–95% of the limit. It does not make the app return memory, but it keeps garbage from
+  pushing the app over its own limit during a spike.
+
+Use `request` = `limit` (Guaranteed QoS) when spikes are correlated (replicas), when the pod is critical, or
+when the app keeps its memory (idle after spikes without `FreeOSMemory`, or a JVM with `-Xms` = `-Xmx`).
+Memory cannot be throttled like CPU, so overcommitting it means accepting OOM kills.
