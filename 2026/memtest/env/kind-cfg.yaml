@@ -1,0 +1,20 @@
+# Rendered by setup.sh with envsubst. The apps worker gets system-reserved = host RAM - pods
+# budget, so the kubelet caps kubepods.slice (memory.max) at the budget and reports it as
+# allocatable. kind nodes share the host kernel and see host /proc/meminfo, so this cgroup is
+# the only real "node RAM" limit.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+- role: control-plane
+- role: worker
+  labels:
+    role: apps
+  kubeadmConfigPatches:
+  - |
+    kind: JoinConfiguration
+    nodeRegistration:
+      kubeletExtraArgs:
+        system-reserved: "memory=${SYSTEM_RESERVED_MIB}Mi"
+- role: worker
+  labels:
+    role: monitoring

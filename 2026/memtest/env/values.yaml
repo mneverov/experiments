@@ -1,0 +1,31 @@
+# kube-prometheus-stack: everything on the monitoring node, so only the apps (plus kindnet and
+# kube-proxy) count against the apps node budget.
+alertmanager:
+  enabled: false
+prometheus:
+  prometheusSpec:
+    nodeSelector: {role: monitoring}
+    scrapeInterval: 5s
+    evaluationInterval: 5s
+    # Pick up PodMonitors without the release label.
+    podMonitorSelectorNilUsesHelmValues: false
+prometheusOperator:
+  nodeSelector: {role: monitoring}
+  admissionWebhooks:
+    deployment:
+      nodeSelector: {role: monitoring}
+    patch:
+      nodeSelector: {role: monitoring}
+kube-state-metrics:
+  nodeSelector: {role: monitoring}
+grafana:
+  nodeSelector: {role: monitoring}
+  adminPassword: prom-operator
+prometheus-node-exporter:
+  # Host-wide /proc/meminfo (shared by all kind nodes); kept off the apps node budget.
+  nodeSelector: {role: monitoring}
+kubelet:
+  serviceMonitor:
+    interval: 5s
+    # The chart drops some cAdvisor series by default (e.g. container_memory_swap); keep all.
+    cAdvisorMetricRelabelings: []
