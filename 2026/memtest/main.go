@@ -37,6 +37,7 @@ var (
 	spikeAfter  = flag.Duration("spike-after", 2*time.Minute, "time from start to the spike")
 	spikeFor    = flag.Duration("spike-for", 2*time.Minute, "spike duration")
 	freeOSEvery = flag.Duration("free-os-memory-every", 0, "call debug.FreeOSMemory at this interval; 0 disables it")
+	churnMiB    = flag.Int("churn-mib-per-sec", 0, "allocate this much short-lived garbage per second, like a service handling requests; 0 disables it")
 )
 
 var (
@@ -69,6 +70,7 @@ func main() {
 				"godebug":              os.Getenv("GODEBUG"),
 				"gomemlimit":           os.Getenv("GOMEMLIMIT"),
 				"free_os_memory_every": freeOSEvery.String(),
+				"churn_mib_per_sec":    strconv.Itoa(*churnMiB),
 			},
 		}, func() float64 { return 1 }),
 	)
@@ -82,6 +84,9 @@ func main() {
 	})
 	go func() { log.Fatal(http.ListenAndServe(*addr, nil)) }()
 
+	if *churnMiB > 0 {
+		go churn(*churnMiB)
+	}
 	if *freeOSEvery > 0 {
 		go func() {
 			for range time.Tick(*freeOSEvery) {
@@ -91,8 +96,8 @@ func main() {
 		}()
 	}
 
-	log.Printf("experiment=%s base=%dMiB spike=+%dMiB after=%s for=%s free-os-memory-every=%s GODEBUG=%q GOMEMLIMIT=%q",
-		*experiment, *baseMiB, *spikeMiB, *spikeAfter, *spikeFor, *freeOSEvery, os.Getenv("GODEBUG"), os.Getenv("GOMEMLIMIT"))
+	log.Printf("experiment=%s base=%dMiB spike=+%dMiB after=%s for=%s free-os-memory-every=%s churn=%dMiB/s GODEBUG=%q GOMEMLIMIT=%q",
+		*experiment, *baseMiB, *spikeMiB, *spikeAfter, *spikeFor, *freeOSEvery, *churnMiB, os.Getenv("GODEBUG"), os.Getenv("GOMEMLIMIT"))
 
 	base := hold(*baseMiB)
 	heldBytes.Set(float64(len(base) * mib))
@@ -112,8 +117,8 @@ func main() {
 	heldBytes.Set(float64(len(base) * mib))
 	log.Printf("spike over: holding %d MiB", *baseMiB)
 
-	// Keep base reachable forever; no further allocation, so only the runtime's periodic GC
-	// (sysmon forces one every 2 min) and the background scavenger act from here on.
+	// Keep base reachable forever. Without --churn-mib-per-sec nothing allocates from here on, so only
+	// the runtime's periodic GC (sysmon forces one every 2 min) and the background scavenger act.
 	for {
 		time.Sleep(time.Hour)
 		runtime.KeepAlive(base)
@@ -122,6 +127,24 @@ func main() {
 
 // hold allocates n 1 MiB chunks and writes one byte per page, so every page is resident:
 // memory fresh from the OS is already zero and Go does not touch it.
+// churnSink makes each churn allocation escape to the heap; a local 64 KiB slice could live on the stack.
+var churnSink []byte
+
+// churn allocates mibPerSec MiB per second as 64 KiB objects that die right away, writing every page
+// like a request handler would, so the GC runs as in a busy service.
+func churn(mibPerSec int) {
+	const obj = 64 << 10
+	perTick := mibPerSec * mib / obj / 100 // every 10 ms
+	for range time.Tick(10 * time.Millisecond) {
+		for range perTick {
+			churnSink = make([]byte, obj)
+			for p := 0; p < obj; p += pageSize {
+				churnSink[p] = 1
+			}
+		}
+	}
+}
+
 func hold(n int) [][]byte {
 	chunks := make([][]byte, n)
 	for i := range chunks {

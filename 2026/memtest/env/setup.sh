@@ -24,12 +24,11 @@ nodes:
   labels:
     role: monitoring
 YAML
-  for run in "${RUNS[@]}"; do
+  for _ in "${RUNS[@]}"; do
     cat <<YAML
 - role: worker
   labels:
     role: apps
-    memtest/slot: $run
   kubeadmConfigPatches:
   - |
     kind: JoinConfiguration
@@ -53,7 +52,6 @@ kubectl apply -f env/podmonitor.yaml
 
 echo "apps nodes, kubepods.slice memory.max:"
 for node in $(kubectl get nodes -l role=apps -o jsonpath='{.items[*].metadata.name}'); do
-  echo "  $node $(kubectl get node "$node" -o jsonpath='{.metadata.labels.memtest/slot}') \
-$(docker exec "$node" cat /sys/fs/cgroup/kubelet.slice/kubelet-kubepods.slice/memory.max)"
+  echo "  $node $(docker exec "$node" cat /sys/fs/cgroup/kubelet.slice/kubelet-kubepods.slice/memory.max)"
 done
 echo "Grafana: make grafana, then http://localhost:3000/d/memtest (admin:prom-operator)"

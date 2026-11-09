@@ -1,7 +1,7 @@
 # memtest: does a Go process give RAM back to the OS without a restart?
 
 The app holds `--base-mib` (200 MiB) for its lifetime, holds `--spike-mib` more (+600 MiB, so 800 MiB in
-total) from `--spike-after` for `--spike-for`, then drops the spike and runs forever without allocating.
+total) from `--spike-after` for `--spike-for`, then drops the spike and runs forever. It allocates nothing else unless `--churn-mib-per-sec` makes it a busy app.
 Every page it holds is written, so it is resident.
 
 It exports on `:6060/metrics`:
@@ -30,15 +30,15 @@ and `/debug/pprof` is there as usual. `GODEBUG=gctrace=1,scavtrace=1` puts GC an
 
 ## Environment
 
-`make setup-env` builds the image and creates kind cluster `memtest2026`, kindest/node v1.35.0, with 12 nodes:
+`make setup-env` builds the image and creates kind cluster `memtest2026`, kindest/node v1.35.0, with 14 nodes (12 apps, monitoring, control plane):
 
-- One `apps` worker per run (the `RUNS` list in `env/common.sh`), labeled `memtest/slot=<run>`. Each runs
-  that run's two apps, so all runs can go at the same time without sharing memory. The setup sets
+- One `apps` worker per run (the `RUNS` list in `env/common.sh`). The runner puts each run's two apps
+  on a free apps node, so all runs can go at the same time without sharing memory. The setup sets
   `system-reserved = host RAM - PODS_BUDGET_MIB` (1200 MiB by default), so the kubelet caps
   `kubepods.slice` at 1200 MiB (`memory.max`) and reports that as allocatable. kind nodes share the host
   kernel and see the host's `/proc/meminfo`, so this cgroup is the node's real RAM limit. kindnet and
   kube-proxy use about 30 MiB of it.
-- Host requirements: about 15 GB free RAM while all ten A apps spike at once, and
+- Host requirements: about 15 GB free RAM while all twelve A apps spike at once, and
   `fs.inotify.max_user_instances` of at least 512 (`sudo sysctl fs.inotify.max_user_instances=512`), or
   some kind nodes fail with "too many open files".
 - `monitoring` worker: kube-prometheus-stack (Prometheus, Grafana, kube-state-metrics, node-exporter)
@@ -79,7 +79,7 @@ The dashboard has these sections:
 
 ## Experiments
 
-`make experiments` starts all ten runs at once, each on its own apps node; the last one ends after 14 min.
+`make experiments` starts all twelve runs at once, each on its own apps node; the last one ends after 14 min.
 `make experiment-<mode>-<late|early>` (e.g. `make experiment-madv-free-late`) or
 `./env/run-experiments.sh <run>...` starts only the given runs. Each run replaces its two apps, takes a
 flight recorder snapshot of both every minute, deletes the apps when it ends (a restarted pod would rerun
@@ -100,6 +100,11 @@ Modes:
 | `madv-free` | `GODEBUG=madvdontneed=0` | lazy release: does node pressure take the memory back? |
 | `gomemlimit-800` | `GOMEMLIMIT=800MiB` | the usual production setting (~95% of the container limit) |
 | `gomemlimit-400` | `GOMEMLIMIT=400MiB` | a soft limit below the spike: does the runtime return memory sooner? |
+| `alloc` | default settings, `--churn-mib-per-sec=20`, 100 MiB base, +300 MiB spike | a busy app: does the default return memory sooner when the GC runs every few seconds? |
+
+The `alloc` apps allocate 20 MiB/s of short-lived garbage for their whole life, like a service handling
+requests. Garbage lets the heap grow to twice the live data (`GOGC=100`), so they hold half the live data
+of the other modes, which gives the same RSS: about 215 MiB at base and 818 MiB during the spike.
 
 `GOMEMLIMIT` makes the runtime keep its total memory under the limit: the GC runs more often (capped at
 about 50% CPU when the live heap exceeds the limit), and the scavenger releases free memory down to 95% of
@@ -158,9 +163,13 @@ about 7s later.
 | free-os-memory | early | 30s / 30s | 1089 MiB | fits | [run](http://localhost:3000/d/memtest?var-run=free-os-memory-early&from=1794228936000&to=1794229626000) |
 | madv-free | early | not released: A OOM-killed | kill not sampled | **A killed first (831 / 831 MiB)**; B in the same second in the serial sample, 2 min later by the restarted A's spike in the parallel one | [run](http://localhost:3000/d/memtest?var-run=madv-free-early&from=1794228936000&to=1794229626000) |
 | gomemlimit-800 | early | not released: A OOM-killed | kill not sampled | **A killed first (788 / 769 MiB)**; B 2 min later by the restarted A's spike | [run](http://localhost:3000/d/memtest?var-run=gomemlimit-800-early&from=1794228936000&to=1794229626000) |
+| alloc | late | 20s (one sample) | 1095 MiB | fits | [run](http://localhost:3000/d/memtest?var-run=alloc-late&from=1794231426000&to=1794232386000) |
+| alloc | early | 10s (one sample) | 1101 MiB | **fits** | [run](http://localhost:3000/d/memtest?var-run=alloc-early&from=1794231426000&to=1794232116000) |
 | gomemlimit-400 | early | 5s / 5s | 1092 MiB | fits | [run](http://localhost:3000/d/memtest?var-run=gomemlimit-400-early&from=1794228936000&to=1794229626000) |
 
 "kill not sampled": the 5s scrape misses the instant the node hits its limit; the kernel log has the kill.
+
+The `alloc` runs ran later, from 14:38:06 on two of the same apps nodes (`results/20261109T143806/`), once.
 
 Findings:
 
@@ -198,12 +207,19 @@ Findings:
    A Deployment restart re-runs the whole spike schedule: 2 min after its kill, the restarted A spiked
    again while B still held its own spike, and the next OOM killed B. That's why only the first OOM of
    an early run is clean.
+8. **A busy app returns the spike in 10–20s with default settings, and the OOM does not happen.** At
+   20 MiB/s of garbage the GC runs every ~5s at base instead of every 2 min, so the "second GC after the
+   spike" comes quickly. In the early scenario, where the idle default app was OOM-killed, the busy app had
+   already released the spike when B spiked; `kubepods` peaked at 1101 MiB. The cost is the usual GC cost:
+   about 136 cycles in 14 min, 0.07% of a core, and a heap that grows to twice the live data, so
+   such an app needs a container limit of about twice its live peak.
 
 Not verified or not covered:
 
 - Swap. Pods run with `memory.swap.max=0` (kubelet `NoSwap`). With `LimitedSwap`, retained heap pages would
   be swapped instead of OOM-killed.
-- An app that keeps allocating after the spike. It would run GCs more often than every 2 min, so the
-  default mode would release sooner. These runs show the worst case: an idle process.
+- The `alloc` mode ran once, at one rate (20 MiB/s). The release delay is about the time to allocate
+  the spike's remaining heap headroom plus one GC cycle at base. A slower app releases later, approaching
+  the idle case's 2–3.5 min.
 - Two samples per run. The default timing depends on where the 2-minute periodic GC falls relative to
   the spike end: 170s and 210s for default, 120s for gomemlimit-800, about 240s in the local run.

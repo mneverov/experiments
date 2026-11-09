@@ -24,7 +24,7 @@ spec:
         app.kubernetes.io/instance: "${APP}"
     spec:
       nodeSelector:
-        memtest/slot: "${RUN}"
+        kubernetes.io/hostname: "${NODE}"
       terminationGracePeriodSeconds: 1
       containers:
       - name: memtest
@@ -37,6 +37,7 @@ spec:
         - --spike-after=${SPIKE_AFTER}
         - --spike-for=${SPIKE_FOR}
         - --free-os-memory-every=${FREE_OS_MEMORY_EVERY}
+        - --churn-mib-per-sec=${CHURN_MIB_PER_SEC}
         env:
         - name: GODEBUG
           value: "${APP_GODEBUG}"

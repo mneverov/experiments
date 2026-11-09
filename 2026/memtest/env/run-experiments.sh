@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 # usage: run-experiments.sh [run...]
-#   run = <default|free-os-memory|madv-free|gomemlimit-800|gomemlimit-400>-<late|early>;
+#   run = <default|free-os-memory|madv-free|gomemlimit-800|gomemlimit-400|alloc>-<late|early>;
 #   no arguments: all runs in env/common.sh.
 #
-# Starts the given runs at the same time, each on its own apps node (label memtest/slot=<run>, pods
-# budget 1200Mi: one app at spike + one at base fits, two at spike do not), so runs do not share
-# memory. Per run, app a spikes from 2m to 4m30s. An idle Go app releases freed spans at the second
+# Starts the given runs at the same time, each on its own free apps node (pods budget 1200Mi: one app at
+# spike + one at base fits, two at spike do not), so runs do not share memory. Per run, app a spikes from 2m to 4m30s. An idle Go app releases freed spans at the second
 # GC after they became garbage; without allocation those are periodic GCs every 2 min, so A's
 # runtime gives the memory back 2-4 min after its spike.
 #   late:  B spikes at 10m, after A's runtime released (or MADV_FREE'd) the spike.
@@ -26,13 +25,16 @@ runs=("$@")
 # pick it up.
 configure() {
   local mode=${1%-*} scenario=${1##*-}
-  export RUN=$1 BASE_MIB=200 SPIKE_MIB=600 FREE_OS_MEMORY_EVERY=0s APP_GODEBUG="gctrace=1,scavtrace=1" APP_GOMEMLIMIT=
+  export RUN=$1 BASE_MIB=200 SPIKE_MIB=600 FREE_OS_MEMORY_EVERY=0s CHURN_MIB_PER_SEC=0 APP_GODEBUG="gctrace=1,scavtrace=1" APP_GOMEMLIMIT=
   case $mode in
     default) ;; # MADV_DONTNEED: the default on Linux since Go 1.16
     free-os-memory) FREE_OS_MEMORY_EVERY=30s ;;
     madv-free) APP_GODEBUG="madvdontneed=0,$APP_GODEBUG" ;; # MADV_FREE: pages stay in RSS until the kernel needs them
     gomemlimit-800) APP_GOMEMLIMIT=800MiB ;; # ~95% of the 850Mi container limit, the usual production setting
     gomemlimit-400) APP_GOMEMLIMIT=400MiB ;; # below the 800 MiB spike: GC runs constantly during it
+    # Default settings in a busy app. The garbage doubles the heap (GOGC=100), so half the live data
+    # gives the same RSS as the idle modes: ~200 MiB at base, ~800 MiB during the spike.
+    alloc) BASE_MIB=100 SPIKE_MIB=300 CHURN_MIB_PER_SEC=20 ;;
     *) echo "unknown mode in run $1" >&2; return 1 ;;
   esac
   case $scenario in
@@ -45,7 +47,6 @@ configure() {
 declare -A total # run -> duration in seconds: B's spike, then 2 min to watch the aftermath
 for run in "${runs[@]}"; do
   configure "$run"
-  [[ -n $(kubectl get nodes -l "memtest/slot=$run" -o name) ]] || { echo "no apps node for run $run; see env/common.sh" >&2; exit 1; }
   total[$run]=$((B_AFTER + 240))
 done
 
@@ -53,9 +54,17 @@ selector="memtest/run in ($(IFS=,; echo "${runs[*]}"))"
 kubectl delete deploy -n memtest -l "$selector" --ignore-not-found --wait
 kubectl wait --for=delete pod -n memtest -l "$selector" --timeout=60s 2>/dev/null || true
 
+# Free apps nodes: no memtest pod on them.
+mapfile -t free < <(comm -23 \
+  <(kubectl get nodes -l role=apps -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' | sort) \
+  <(kubectl get pods -n memtest -o jsonpath='{range .items[*]}{.spec.nodeName}{"\n"}{end}' | sort -u))
+((${#free[@]} >= ${#runs[@]})) || { echo "${#runs[@]} runs need ${#runs[@]} free apps nodes, found ${#free[@]}" >&2; exit 1; }
+
 deploy() { APP=$1 SPIKE_AFTER=$2 SPIKE_FOR=$3 envsubst < env/deployment.yaml | kubectl apply -f -; }
+i=0
 for run in "${runs[@]}"; do
-  (configure "$run" && deploy a 2m 2m30s && deploy b "${B_AFTER}s" 2m)
+  (export NODE=${free[i]} && configure "$run" && deploy a 2m 2m30s && deploy b "${B_AFTER}s" 2m)
+  ((++i))
 done
 for run in "${runs[@]}"; do for app in a b; do kubectl rollout status -n memtest "deploy/$run-$app" --timeout=120s >/dev/null; done; done
 start=$(date +%s)
