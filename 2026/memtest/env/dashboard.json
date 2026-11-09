@@ -11,6 +11,23 @@
   "templating": {
     "list": [
       {
+        "name": "run",
+        "type": "query",
+        "label": "run",
+        "multi": false,
+        "includeAll": false,
+        "refresh": 2,
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "query": {
+          "query": "label_values(memtest_info{namespace=\"memtest\"}, experiment)",
+          "refId": "run"
+        },
+        "definition": "label_values(memtest_info{namespace=\"memtest\"}, experiment)"
+      },
+      {
         "name": "pod",
         "type": "query",
         "label": "pod",
@@ -26,24 +43,54 @@
           "uid": "prometheus"
         },
         "query": {
-          "query": "label_values(memtest_info{namespace=\"memtest\"}, pod)",
+          "query": "label_values(memtest_info{namespace=\"memtest\", experiment=\"$run\"}, pod)",
           "refId": "pod"
         },
-        "definition": "label_values(memtest_info{namespace=\"memtest\"}, pod)"
+        "definition": "label_values(memtest_info{namespace=\"memtest\", experiment=\"$run\"}, pod)"
+      },
+      {
+        "name": "node",
+        "type": "query",
+        "label": "apps node",
+        "multi": false,
+        "includeAll": false,
+        "refresh": 2,
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "query": {
+          "query": "label_values(kube_pod_info{namespace=\"memtest\", pod=~\"$pod\"}, node)",
+          "refId": "node"
+        },
+        "definition": "label_values(kube_pod_info{namespace=\"memtest\", pod=~\"$pod\"}, node)"
       }
     ]
   },
   "annotations": {
     "list": [
       {
-        "name": "phase change",
+        "name": "OOM kill",
         "enable": true,
         "iconColor": "red",
         "datasource": {
           "type": "prometheus",
           "uid": "prometheus"
         },
-        "expr": "changes(memtest_phase{namespace=\"memtest\"}[10s]) > 0",
+        "expr": "(changes(kube_pod_container_status_restarts_total{namespace=\"memtest\", pod=~\"$pod\"}[15s]) > 0) * on(namespace, pod, container) group_left kube_pod_container_status_last_terminated_reason{namespace=\"memtest\", pod=~\"$pod\", reason=\"OOMKilled\"}",
+        "step": "5s",
+        "titleFormat": "OOM kill {{pod}}",
+        "textFormat": "{{pod}} was OOM-killed and restarted"
+      },
+      {
+        "name": "phase change",
+        "enable": true,
+        "iconColor": "blue",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "expr": "changes(memtest_phase{namespace=\"memtest\", pod=~\"$pod\"}[10s]) > 0",
         "step": "5s",
         "titleFormat": "phase change {{pod}}",
         "textFormat": "{{pod}}"
@@ -65,6 +112,59 @@
     },
     {
       "id": 2,
+      "type": "stat",
+      "title": "OOM kills in the selected time range",
+      "description": "Container restarts in the range, counted for pods whose last termination reason is OOMKilled. The red 'OOM kill' annotations mark when. results/<run>/oom-kills.txt has the kernel's view: which process was killed first and its RSS.",
+      "gridPos": {
+        "h": 4,
+        "w": 24,
+        "x": 0,
+        "y": 1
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "0",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(max_over_time(kube_pod_container_status_restarts_total{namespace=\"memtest\", pod=~\"$pod\"}[$__range]) - min_over_time(kube_pod_container_status_restarts_total{namespace=\"memtest\", pod=~\"$pod\"}[$__range])) * on(namespace, pod, container) group_left max_over_time(kube_pod_container_status_last_terminated_reason{namespace=\"memtest\", pod=~\"$pod\", reason=\"OOMKilled\"}[$__range])",
+          "legendFormat": "{{pod}}",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 3,
       "type": "timeseries",
       "title": "Memory the app holds on purpose",
       "description": "memtest_held_bytes: base, base+spike during the spike, base again after it. Annotations mark phase changes.",
@@ -72,7 +172,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 1
+        "y": 5
       },
       "fieldConfig": {
         "defaults": {
@@ -107,33 +207,39 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "memtest_held_bytes{namespace=\"memtest\"} * on(pod) group_left(experiment, gomemlimit) memtest_info",
+          "expr": "memtest_held_bytes{namespace=\"memtest\", pod=~\"$pod\"} * on(pod) group_left(experiment, gomemlimit) memtest_info",
           "legendFormat": "{{pod}} ({{experiment}})"
         }
       ]
     },
     {
-      "id": 3,
+      "id": 4,
       "type": "timeseries",
-      "title": "Restarts and OOM kills",
-      "description": "",
+      "title": "OOM kills over time",
+      "description": "Red bars: a pod was OOM-killed (restart with reason OOMKilled, seen by kube-state-metrics within ~10s).",
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 1
+        "y": 5
       },
       "fieldConfig": {
         "defaults": {
           "unit": "short",
           "custom": {
-            "fillOpacity": 0,
+            "fillOpacity": 80,
             "showPoints": "never",
             "spanNulls": false,
             "stacking": {
               "mode": "none",
               "group": "A"
-            }
+            },
+            "drawStyle": "bars",
+            "lineWidth": 1
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "red"
           }
         },
         "overrides": []
@@ -156,23 +262,13 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "kube_pod_container_status_restarts_total{namespace=\"memtest\"}",
-          "legendFormat": "restarts {{pod}}"
-        },
-        {
-          "refId": "B",
-          "expr": "kube_pod_container_status_last_terminated_reason{namespace=\"memtest\", reason=\"OOMKilled\"}",
-          "legendFormat": "last terminated OOMKilled {{pod}}"
-        },
-        {
-          "refId": "C",
-          "expr": "sum by (pod) (container_oom_events_total{namespace=\"memtest\", container=\"memtest\"})",
-          "legendFormat": "cgroup oom events {{pod}}"
+          "expr": "(changes(kube_pod_container_status_restarts_total{namespace=\"memtest\", pod=~\"$pod\"}[30s]) > 0) * on(namespace, pod, container) group_left kube_pod_container_status_last_terminated_reason{namespace=\"memtest\", pod=~\"$pod\", reason=\"OOMKilled\"}",
+          "legendFormat": "OOM kill {{pod}}"
         }
       ]
     },
     {
-      "id": 4,
+      "id": 5,
       "type": "row",
       "title": "Inside the pod: Go runtime (runtime/metrics) and kernel view of the process (smaps, cgroup)",
       "collapsed": false,
@@ -180,11 +276,11 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 9
+        "y": 13
       }
     },
     {
-      "id": 5,
+      "id": 6,
       "type": "timeseries",
       "title": "Go heap: $pod",
       "description": "Stacked heap memory classes. 'free, retained' is what the runtime keeps for reuse; the kernel cannot take it back (no swap). 'released' was handed back with MADV_DONTNEED (default) or MADV_FREE (GODEBUG=madvdontneed=0).",
@@ -192,7 +288,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 10
+        "y": 14
       },
       "fieldConfig": {
         "defaults": {
@@ -354,7 +450,7 @@
       "maxPerRow": 2
     },
     {
-      "id": 6,
+      "id": 7,
       "type": "timeseries",
       "title": "Kernel view: $pod",
       "description": "What the kernel charges to the process and its container. With MADV_FREE, RSS stays high and LazyFree grows until the kernel needs the pages.",
@@ -362,7 +458,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 18
+        "y": 22
       },
       "fieldConfig": {
         "defaults": {
@@ -471,7 +567,7 @@
       "maxPerRow": 2
     },
     {
-      "id": 7,
+      "id": 8,
       "type": "timeseries",
       "title": "Total allocated (cumulative)",
       "description": "",
@@ -479,7 +575,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 26
+        "y": 30
       },
       "fieldConfig": {
         "defaults": {
@@ -514,13 +610,13 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "go_gc_heap_allocs_bytes_total{namespace=\"memtest\"}",
+          "expr": "go_gc_heap_allocs_bytes_total{namespace=\"memtest\", pod=~\"$pod\"}",
           "legendFormat": "{{pod}}"
         }
       ]
     },
     {
-      "id": 8,
+      "id": 9,
       "type": "timeseries",
       "title": "GC cycles (all, incl. periodic), forced GCs and FreeOSMemory calls",
       "description": "Without allocation, GC runs only when sysmon triggers the periodic GC every 2 min (counted as a normal cycle, not as forced). debug.FreeOSMemory is a forced GC plus a full scavenge.",
@@ -528,7 +624,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 26
+        "y": 30
       },
       "fieldConfig": {
         "defaults": {
@@ -563,23 +659,23 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "go_gc_cycles_total_gc_cycles_total{namespace=\"memtest\"}",
+          "expr": "go_gc_cycles_total_gc_cycles_total{namespace=\"memtest\", pod=~\"$pod\"}",
           "legendFormat": "GC cycles {{pod}}"
         },
         {
           "refId": "B",
-          "expr": "go_gc_cycles_forced_gc_cycles_total{namespace=\"memtest\"}",
+          "expr": "go_gc_cycles_forced_gc_cycles_total{namespace=\"memtest\", pod=~\"$pod\"}",
           "legendFormat": "forced: runtime.GC incl. FreeOSMemory {{pod}}"
         },
         {
           "refId": "C",
-          "expr": "memtest_free_os_memory_calls_total{namespace=\"memtest\"}",
+          "expr": "memtest_free_os_memory_calls_total{namespace=\"memtest\", pod=~\"$pod\"}",
           "legendFormat": "FreeOSMemory calls {{pod}}"
         }
       ]
     },
     {
-      "id": 9,
+      "id": 10,
       "type": "timeseries",
       "title": "Scavenger and GC CPU",
       "description": "",
@@ -587,7 +683,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 34
+        "y": 38
       },
       "fieldConfig": {
         "defaults": {
@@ -622,18 +718,18 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "rate(go_cpu_classes_scavenge_total_cpu_seconds_total{namespace=\"memtest\"}[1m])",
+          "expr": "rate(go_cpu_classes_scavenge_total_cpu_seconds_total{namespace=\"memtest\", pod=~\"$pod\"}[1m])",
           "legendFormat": "scavenger {{pod}}"
         },
         {
           "refId": "B",
-          "expr": "rate(go_cpu_classes_gc_total_cpu_seconds_total{namespace=\"memtest\"}[1m])",
+          "expr": "rate(go_cpu_classes_gc_total_cpu_seconds_total{namespace=\"memtest\", pod=~\"$pod\"}[1m])",
           "legendFormat": "GC {{pod}}"
         }
       ]
     },
     {
-      "id": 10,
+      "id": 11,
       "type": "timeseries",
       "title": "Kernel reclaim in the pod cgroup (pages/s)",
       "description": "pglazyfree: pages the app marked MADV_FREE. pglazyfreed: of those, pages the kernel actually took back under pressure. pgscan/pgsteal: reclaim scanning/stealing.",
@@ -641,7 +737,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 34
+        "y": 38
       },
       "fieldConfig": {
         "defaults": {
@@ -676,13 +772,13 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "rate(memtest_cgroup_memory_stat{namespace=\"memtest\", field=~\"pglazyfree|pglazyfreed|pgscan|pgsteal|pswpout|workingset_refault_anon\"}[1m])",
+          "expr": "rate(memtest_cgroup_memory_stat{namespace=\"memtest\", pod=~\"$pod\", field=~\"pglazyfree|pglazyfreed|pgscan|pgsteal|pswpout|workingset_refault_anon\"}[1m])",
           "legendFormat": "{{field}} {{pod}}"
         }
       ]
     },
     {
-      "id": 11,
+      "id": 12,
       "type": "timeseries",
       "title": "Pod memory pressure (PSI)",
       "description": "Share of time tasks in the pod cgroup stalled on memory (reclaim).",
@@ -690,7 +786,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 42
+        "y": 46
       },
       "fieldConfig": {
         "defaults": {
@@ -725,13 +821,13 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "rate(memtest_cgroup_memory_pressure_seconds_total{namespace=\"memtest\"}[1m])",
+          "expr": "rate(memtest_cgroup_memory_pressure_seconds_total{namespace=\"memtest\", pod=~\"$pod\"}[1m])",
           "legendFormat": "{{kind}} {{pod}}"
         }
       ]
     },
     {
-      "id": 12,
+      "id": 13,
       "type": "timeseries",
       "title": "Process RSS and virtual size (process collector)",
       "description": "",
@@ -739,7 +835,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 42
+        "y": 46
       },
       "fieldConfig": {
         "defaults": {
@@ -774,30 +870,30 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "process_resident_memory_bytes{namespace=\"memtest\"}",
+          "expr": "process_resident_memory_bytes{namespace=\"memtest\", pod=~\"$pod\"}",
           "legendFormat": "RSS {{pod}}"
         },
         {
           "refId": "B",
-          "expr": "process_virtual_memory_bytes{namespace=\"memtest\"}",
+          "expr": "process_virtual_memory_bytes{namespace=\"memtest\", pod=~\"$pod\"}",
           "legendFormat": "VSZ {{pod}}"
         }
       ]
     },
     {
-      "id": 13,
+      "id": 14,
       "type": "row",
-      "title": "Apps node (cAdvisor): kubepods.slice is capped at the pods budget by system-reserved",
+      "title": "Apps node of the run ($node, cAdvisor): kubepods.slice is capped at the pods budget by system-reserved",
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 50
+        "y": 54
       }
     },
     {
-      "id": 14,
+      "id": 15,
       "type": "timeseries",
       "title": "Pods on the apps node (working set, stacked) vs. allocatable",
       "description": "",
@@ -805,7 +901,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 51
+        "y": 55
       },
       "fieldConfig": {
         "defaults": {
@@ -870,18 +966,18 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (pod) (container_memory_working_set_bytes{node=\"memtest2026-worker\", container!=\"\", container!=\"POD\"})",
+          "expr": "sum by (pod) (container_memory_working_set_bytes{node=~\"$node\", container!=\"\", container!=\"POD\"})",
           "legendFormat": "{{pod}}"
         },
         {
           "refId": "B",
-          "expr": "kube_node_status_allocatable{node=\"memtest2026-worker\", resource=\"memory\"}",
+          "expr": "kube_node_status_allocatable{node=~\"$node\", resource=\"memory\"}",
           "legendFormat": "allocatable (kubepods memory.max)"
         }
       ]
     },
     {
-      "id": 15,
+      "id": 16,
       "type": "timeseries",
       "title": "kubepods.slice memory (all pods on the node)",
       "description": "",
@@ -889,7 +985,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 51
+        "y": 55
       },
       "fieldConfig": {
         "defaults": {
@@ -954,38 +1050,38 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "container_memory_usage_bytes{node=\"memtest2026-worker\", id=\"/kubelet.slice/kubelet-kubepods.slice\"}",
+          "expr": "container_memory_usage_bytes{node=~\"$node\", id=\"/kubelet.slice/kubelet-kubepods.slice\"}",
           "legendFormat": "usage (memory.current)"
         },
         {
           "refId": "B",
-          "expr": "container_memory_working_set_bytes{node=\"memtest2026-worker\", id=\"/kubelet.slice/kubelet-kubepods.slice\"}",
+          "expr": "container_memory_working_set_bytes{node=~\"$node\", id=\"/kubelet.slice/kubelet-kubepods.slice\"}",
           "legendFormat": "working set"
         },
         {
           "refId": "C",
-          "expr": "container_memory_rss{node=\"memtest2026-worker\", id=\"/kubelet.slice/kubelet-kubepods.slice\"}",
+          "expr": "container_memory_rss{node=~\"$node\", id=\"/kubelet.slice/kubelet-kubepods.slice\"}",
           "legendFormat": "rss (anon)"
         },
         {
           "refId": "D",
-          "expr": "container_memory_cache{node=\"memtest2026-worker\", id=\"/kubelet.slice/kubelet-kubepods.slice\"}",
+          "expr": "container_memory_cache{node=~\"$node\", id=\"/kubelet.slice/kubelet-kubepods.slice\"}",
           "legendFormat": "cache (file)"
         },
         {
           "refId": "E",
-          "expr": "container_memory_swap{node=\"memtest2026-worker\", id=\"/kubelet.slice/kubelet-kubepods.slice\"}",
+          "expr": "container_memory_swap{node=~\"$node\", id=\"/kubelet.slice/kubelet-kubepods.slice\"}",
           "legendFormat": "swap"
         },
         {
           "refId": "F",
-          "expr": "kube_node_status_allocatable{node=\"memtest2026-worker\", resource=\"memory\"}",
+          "expr": "kube_node_status_allocatable{node=~\"$node\", resource=\"memory\"}",
           "legendFormat": "limit"
         }
       ]
     },
     {
-      "id": 16,
+      "id": 17,
       "type": "timeseries",
       "title": "Node memory pressure (PSI, cAdvisor)",
       "description": "",
@@ -993,7 +1089,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 59
+        "y": 63
       },
       "fieldConfig": {
         "defaults": {
@@ -1028,23 +1124,23 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "rate(container_pressure_memory_stalled_seconds_total{node=\"memtest2026-worker\", id=\"/kubelet.slice/kubelet-kubepods.slice\"}[1m])",
+          "expr": "rate(container_pressure_memory_stalled_seconds_total{node=~\"$node\", id=\"/kubelet.slice/kubelet-kubepods.slice\"}[1m])",
           "legendFormat": "kubepods stalled (full)"
         },
         {
           "refId": "B",
-          "expr": "rate(container_pressure_memory_waiting_seconds_total{node=\"memtest2026-worker\", id=\"/kubelet.slice/kubelet-kubepods.slice\"}[1m])",
+          "expr": "rate(container_pressure_memory_waiting_seconds_total{node=~\"$node\", id=\"/kubelet.slice/kubelet-kubepods.slice\"}[1m])",
           "legendFormat": "kubepods waiting (some)"
         },
         {
           "refId": "C",
-          "expr": "rate(container_pressure_memory_stalled_seconds_total{node=\"memtest2026-worker\", id=\"/\"}[1m])",
+          "expr": "rate(container_pressure_memory_stalled_seconds_total{node=~\"$node\", id=\"/\"}[1m])",
           "legendFormat": "node stalled (full)"
         }
       ]
     },
     {
-      "id": 17,
+      "id": 18,
       "type": "timeseries",
       "title": "Node memory failures (reclaim hitting the limit)",
       "description": "",
@@ -1052,7 +1148,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 59
+        "y": 63
       },
       "fieldConfig": {
         "defaults": {
@@ -1087,18 +1183,13 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "rate(container_memory_failures_total{node=\"memtest2026-worker\", id=\"/kubelet.slice/kubelet-kubepods.slice\"}[1m])",
+          "expr": "rate(container_memory_failures_total{node=~\"$node\", id=\"/kubelet.slice/kubelet-kubepods.slice\"}[1m])",
           "legendFormat": "{{failure_type}} {{scope}}"
-        },
-        {
-          "refId": "B",
-          "expr": "container_oom_events_total{node=\"memtest2026-worker\", id=\"/kubelet.slice/kubelet-kubepods.slice\"}",
-          "legendFormat": "kubepods OOM events"
         }
       ]
     },
     {
-      "id": 18,
+      "id": 19,
       "type": "timeseries",
       "title": "Whole kind node container (cgroup root of the node)",
       "description": "kubepods plus kubelet, containerd and systemd of the apps node.",
@@ -1106,7 +1197,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 67
+        "y": 71
       },
       "fieldConfig": {
         "defaults": {
@@ -1141,28 +1232,28 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "container_memory_usage_bytes{node=\"memtest2026-worker\", id=\"/\"}",
+          "expr": "container_memory_usage_bytes{node=~\"$node\", id=\"/\"}",
           "legendFormat": "usage"
         },
         {
           "refId": "B",
-          "expr": "container_memory_rss{node=\"memtest2026-worker\", id=\"/\"}",
+          "expr": "container_memory_rss{node=~\"$node\", id=\"/\"}",
           "legendFormat": "rss (anon)"
         },
         {
           "refId": "C",
-          "expr": "container_memory_cache{node=\"memtest2026-worker\", id=\"/\"}",
+          "expr": "container_memory_cache{node=~\"$node\", id=\"/\"}",
           "legendFormat": "cache (file)"
         },
         {
           "refId": "D",
-          "expr": "container_memory_swap{node=\"memtest2026-worker\", id=\"/\"}",
+          "expr": "container_memory_swap{node=~\"$node\", id=\"/\"}",
           "legendFormat": "swap"
         }
       ]
     },
     {
-      "id": 19,
+      "id": 20,
       "type": "timeseries",
       "title": "Host kernel (node-exporter; shared by all kind nodes)",
       "description": "kind nodes see the host /proc/meminfo, so this is the whole host, not the apps node.",
@@ -1170,7 +1261,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 67
+        "y": 71
       },
       "fieldConfig": {
         "defaults": {

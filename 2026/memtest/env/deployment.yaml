@@ -1,11 +1,12 @@
-# Rendered by run-experiment.sh with envsubst, once per app (a, b).
+# Rendered by run-experiments.sh with envsubst, once per run and app (a, b).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: memtest-${APP}
+  name: ${RUN}-${APP}
   namespace: memtest
   labels:
     app.kubernetes.io/name: memtest
+    memtest/run: "${RUN}"
 spec:
   replicas: 1
   strategy:
@@ -13,22 +14,24 @@ spec:
   selector:
     matchLabels:
       app.kubernetes.io/name: memtest
+      memtest/run: "${RUN}"
       app.kubernetes.io/instance: "${APP}"
   template:
     metadata:
       labels:
         app.kubernetes.io/name: memtest
+        memtest/run: "${RUN}"
         app.kubernetes.io/instance: "${APP}"
     spec:
       nodeSelector:
-        role: apps
+        memtest/slot: "${RUN}"
       terminationGracePeriodSeconds: 1
       containers:
       - name: memtest
         image: memtest:dev
         imagePullPolicy: Never
         args:
-        - --experiment=${EXPERIMENT}
+        - --experiment=${RUN}
         - --base-mib=${BASE_MIB}
         - --spike-mib=${SPIKE_MIB}
         - --spike-after=${SPIKE_AFTER}

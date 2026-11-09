@@ -22,12 +22,12 @@ grafana:
 prometheus:
 	kubectl port-forward -n monitoring svc/kube-prometheus-stack-prometheus 9090
 
-# make experiment-<default|free-os-memory|madv-free|gomemlimit-800|gomemlimit-400>
+# All runs in env/common.sh at once, one apps node each: about 15 min.
+experiments:
+	./env/run-experiments.sh
+
+# One run on its apps node, e.g. make experiment-madv-free-late
 experiment-%:
-	./env/run-experiment.sh $*
+	./env/run-experiments.sh $*
 
 .PHONY: build image setup-env teardown-env load-image grafana prometheus experiments
-
-# All modes and scenarios, about 2 hours.
-experiments:
-	for s in late early; do for m in default free-os-memory madv-free gomemlimit-800 gomemlimit-400; do ./env/run-experiment.sh $$m $$s || exit 1; done; done
