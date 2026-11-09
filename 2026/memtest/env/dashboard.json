@@ -1,0 +1,1320 @@
+{
+  "uid": "memtest",
+  "title": "memtest: does Go return RAM to the OS?",
+  "schemaVersion": 39,
+  "time": {
+    "from": "now-30m",
+    "to": "now"
+  },
+  "refresh": "10s",
+  "graphTooltip": 1,
+  "templating": {
+    "list": [
+      {
+        "name": "run",
+        "type": "query",
+        "label": "run",
+        "multi": false,
+        "includeAll": false,
+        "refresh": 2,
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "query": {
+          "query": "label_values(memtest_info{namespace=\"memtest\"}, experiment)",
+          "refId": "run"
+        },
+        "definition": "label_values(memtest_info{namespace=\"memtest\"}, experiment)"
+      },
+      {
+        "name": "pod",
+        "type": "query",
+        "label": "pod",
+        "multi": true,
+        "includeAll": true,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "refresh": 2,
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "query": {
+          "query": "label_values(memtest_info{namespace=\"memtest\", experiment=\"$run\"}, pod)",
+          "refId": "pod"
+        },
+        "definition": "label_values(memtest_info{namespace=\"memtest\", experiment=\"$run\"}, pod)"
+      },
+      {
+        "name": "node",
+        "type": "query",
+        "label": "apps node",
+        "multi": false,
+        "includeAll": false,
+        "refresh": 2,
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "query": {
+          "query": "label_values(kube_pod_info{namespace=\"memtest\", pod=~\"$pod\"}, node)",
+          "refId": "node"
+        },
+        "definition": "label_values(kube_pod_info{namespace=\"memtest\", pod=~\"$pod\"}, node)"
+      }
+    ]
+  },
+  "annotations": {
+    "list": [
+      {
+        "name": "OOM kill",
+        "enable": true,
+        "iconColor": "red",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "expr": "(changes(kube_pod_container_status_restarts_total{namespace=\"memtest\", pod=~\"$pod\"}[15s]) > 0) * on(namespace, pod, container) group_left kube_pod_container_status_last_terminated_reason{namespace=\"memtest\", pod=~\"$pod\", reason=\"OOMKilled\"}",
+        "step": "5s",
+        "titleFormat": "OOM kill {{pod}}",
+        "textFormat": "{{pod}} was OOM-killed and restarted"
+      },
+      {
+        "name": "phase change",
+        "enable": true,
+        "iconColor": "blue",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "expr": "changes(memtest_phase{namespace=\"memtest\", pod=~\"$pod\"}[10s]) > 0",
+        "step": "5s",
+        "titleFormat": "phase change {{pod}}",
+        "textFormat": "{{pod}}"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Experiment",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "OOM kills in the selected time range",
+      "description": "Container restarts in the range, counted for pods whose last termination reason is OOMKilled. The red 'OOM kill' annotations mark when. results/<run>/oom-kills.txt has the kernel's view: which process was killed first and its RSS.",
+      "gridPos": {
+        "h": 4,
+        "w": 24,
+        "x": 0,
+        "y": 1
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "0",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(max_over_time(kube_pod_container_status_restarts_total{namespace=\"memtest\", pod=~\"$pod\"}[$__range]) - min_over_time(kube_pod_container_status_restarts_total{namespace=\"memtest\", pod=~\"$pod\"}[$__range])) * on(namespace, pod, container) group_left max_over_time(kube_pod_container_status_last_terminated_reason{namespace=\"memtest\", pod=~\"$pod\", reason=\"OOMKilled\"}[$__range])",
+          "legendFormat": "{{pod}}",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Memory the app holds on purpose",
+      "description": "memtest_held_bytes: base, base+spike during the spike, base again after it. Annotations mark phase changes.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "min",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "memtest_held_bytes{namespace=\"memtest\", pod=~\"$pod\"} * on(pod) group_left(experiment, gomemlimit) memtest_info",
+          "legendFormat": "{{pod}} ({{experiment}})"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "OOM kills over time",
+      "description": "Red bars: a pod was OOM-killed (restart with reason OOMKilled, seen by kube-state-metrics within ~10s).",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "fillOpacity": 80,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "drawStyle": "bars",
+            "lineWidth": 1
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "red"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "min",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(changes(kube_pod_container_status_restarts_total{namespace=\"memtest\", pod=~\"$pod\"}[30s]) > 0) * on(namespace, pod, container) group_left kube_pod_container_status_last_terminated_reason{namespace=\"memtest\", pod=~\"$pod\", reason=\"OOMKilled\"}",
+          "legendFormat": "OOM kill {{pod}}"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "row",
+      "title": "Inside the pod: Go runtime (runtime/metrics) and kernel view of the process (smaps, cgroup)",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 13
+      }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Go heap: $pod",
+      "description": "Stacked heap memory classes. 'free, retained' is what the runtime keeps for reuse; the kernel cannot take it back (no swap). 'released' was handed back with MADV_DONTNEED (default) or MADV_FREE (GODEBUG=madvdontneed=0).",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 14
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "fillOpacity": 30,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "heap goal"
+            },
+            "properties": [
+              {
+                "id": "custom.stacking",
+                "value": {
+                  "mode": "none",
+                  "group": "A"
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    10
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "total mapped by runtime"
+            },
+            "properties": [
+              {
+                "id": "custom.stacking",
+                "value": {
+                  "mode": "none",
+                  "group": "A"
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    10
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "GOMEMLIMIT"
+            },
+            "properties": [
+              {
+                "id": "custom.stacking",
+                "value": {
+                  "mode": "none",
+                  "group": "A"
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    10
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "min",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "go_memory_classes_heap_objects_bytes{pod=~\"$pod\"}",
+          "legendFormat": "objects (live + not yet swept)"
+        },
+        {
+          "refId": "B",
+          "expr": "go_memory_classes_heap_unused_bytes{pod=~\"$pod\"}",
+          "legendFormat": "unused (fragmentation in spans)"
+        },
+        {
+          "refId": "C",
+          "expr": "go_memory_classes_heap_free_bytes{pod=~\"$pod\"}",
+          "legendFormat": "free, retained (dirty, NOT returned to OS)"
+        },
+        {
+          "refId": "D",
+          "expr": "go_memory_classes_heap_released_bytes{pod=~\"$pod\"}",
+          "legendFormat": "released to OS (madvise)"
+        },
+        {
+          "refId": "E",
+          "expr": "go_gc_heap_goal_bytes{pod=~\"$pod\"}",
+          "legendFormat": "heap goal"
+        },
+        {
+          "refId": "F",
+          "expr": "go_gc_gomemlimit_bytes{pod=~\"$pod\"} < 1e15",
+          "legendFormat": "GOMEMLIMIT"
+        },
+        {
+          "refId": "G",
+          "expr": "go_memory_classes_total_bytes{pod=~\"$pod\"}",
+          "legendFormat": "total mapped by runtime"
+        }
+      ],
+      "repeat": "pod",
+      "repeatDirection": "h",
+      "maxPerRow": 2
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Kernel view: $pod",
+      "description": "What the kernel charges to the process and its container. With MADV_FREE, RSS stays high and LazyFree grows until the kernel needs the pages.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 22
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "container limit (memory.max)"
+            },
+            "properties": [
+              {
+                "id": "custom.stacking",
+                "value": {
+                  "mode": "none",
+                  "group": "A"
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    10
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "min",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "memtest_smaps_rollup_bytes{pod=~\"$pod\", field=\"Rss\"}",
+          "legendFormat": "RSS (smaps)"
+        },
+        {
+          "refId": "B",
+          "expr": "memtest_smaps_rollup_bytes{pod=~\"$pod\", field=\"Private_Dirty\"}",
+          "legendFormat": "private dirty"
+        },
+        {
+          "refId": "C",
+          "expr": "memtest_smaps_rollup_bytes{pod=~\"$pod\", field=\"LazyFree\"}",
+          "legendFormat": "LazyFree (MADV_FREE'd, still in RSS)"
+        },
+        {
+          "refId": "D",
+          "expr": "memtest_smaps_rollup_bytes{pod=~\"$pod\", field=\"Swap\"}",
+          "legendFormat": "swapped"
+        },
+        {
+          "refId": "E",
+          "expr": "memtest_cgroup_memory_bytes{pod=~\"$pod\", file=\"current\"}",
+          "legendFormat": "cgroup memory.current"
+        },
+        {
+          "refId": "F",
+          "expr": "memtest_cgroup_memory_stat{pod=~\"$pod\", field=\"anon\"}",
+          "legendFormat": "cgroup anon"
+        },
+        {
+          "refId": "G",
+          "expr": "memtest_cgroup_memory_stat{pod=~\"$pod\", field=\"file\"}",
+          "legendFormat": "cgroup file"
+        },
+        {
+          "refId": "H",
+          "expr": "memtest_cgroup_memory_bytes{pod=~\"$pod\", file=\"max\"}",
+          "legendFormat": "container limit (memory.max)"
+        }
+      ],
+      "repeat": "pod",
+      "repeatDirection": "h",
+      "maxPerRow": 2
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Total allocated (cumulative)",
+      "description": "",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 30
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "min",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "go_gc_heap_allocs_bytes_total{namespace=\"memtest\", pod=~\"$pod\"}",
+          "legendFormat": "{{pod}}"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "GC cycles (all, incl. periodic), forced GCs and FreeOSMemory calls",
+      "description": "Without allocation, GC runs only when sysmon triggers the periodic GC every 2 min (counted as a normal cycle, not as forced). debug.FreeOSMemory is a forced GC plus a full scavenge.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 30
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "min",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "go_gc_cycles_total_gc_cycles_total{namespace=\"memtest\", pod=~\"$pod\"}",
+          "legendFormat": "GC cycles {{pod}}"
+        },
+        {
+          "refId": "B",
+          "expr": "go_gc_cycles_forced_gc_cycles_total{namespace=\"memtest\", pod=~\"$pod\"}",
+          "legendFormat": "forced: runtime.GC incl. FreeOSMemory {{pod}}"
+        },
+        {
+          "refId": "C",
+          "expr": "memtest_free_os_memory_calls_total{namespace=\"memtest\", pod=~\"$pod\"}",
+          "legendFormat": "FreeOSMemory calls {{pod}}"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Scavenger and GC CPU",
+      "description": "",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 38
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "min",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(go_cpu_classes_scavenge_total_cpu_seconds_total{namespace=\"memtest\", pod=~\"$pod\"}[1m])",
+          "legendFormat": "scavenger {{pod}}"
+        },
+        {
+          "refId": "B",
+          "expr": "rate(go_cpu_classes_gc_total_cpu_seconds_total{namespace=\"memtest\", pod=~\"$pod\"}[1m])",
+          "legendFormat": "GC {{pod}}"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Kernel reclaim in the pod cgroup (pages/s)",
+      "description": "pglazyfree: pages the app marked MADV_FREE. pglazyfreed: of those, pages the kernel actually took back under pressure. pgscan/pgsteal: reclaim scanning/stealing.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 38
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "min",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(memtest_cgroup_memory_stat{namespace=\"memtest\", pod=~\"$pod\", field=~\"pglazyfree|pglazyfreed|pgscan|pgsteal|pswpout|workingset_refault_anon\"}[1m])",
+          "legendFormat": "{{field}} {{pod}}"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Pod memory pressure (PSI)",
+      "description": "Share of time tasks in the pod cgroup stalled on memory (reclaim).",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 46
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "min",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(memtest_cgroup_memory_pressure_seconds_total{namespace=\"memtest\", pod=~\"$pod\"}[1m])",
+          "legendFormat": "{{kind}} {{pod}}"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Process RSS and virtual size (process collector)",
+      "description": "",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 46
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "min",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "process_resident_memory_bytes{namespace=\"memtest\", pod=~\"$pod\"}",
+          "legendFormat": "RSS {{pod}}"
+        },
+        {
+          "refId": "B",
+          "expr": "process_virtual_memory_bytes{namespace=\"memtest\", pod=~\"$pod\"}",
+          "legendFormat": "VSZ {{pod}}"
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "type": "row",
+      "title": "Apps node of the run ($node, cAdvisor): kubepods.slice is capped at the pods budget by system-reserved",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 54
+      }
+    },
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "Pods on the apps node (working set, stacked) vs. allocatable",
+      "description": "",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 55
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "fillOpacity": 30,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "allocatable (kubepods memory.max)"
+            },
+            "properties": [
+              {
+                "id": "custom.stacking",
+                "value": {
+                  "mode": "none",
+                  "group": "A"
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    10
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "min",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (pod) (container_memory_working_set_bytes{node=~\"$node\", container!=\"\", container!=\"POD\"})",
+          "legendFormat": "{{pod}}"
+        },
+        {
+          "refId": "B",
+          "expr": "kube_node_status_allocatable{node=~\"$node\", resource=\"memory\"}",
+          "legendFormat": "allocatable (kubepods memory.max)"
+        }
+      ]
+    },
+    {
+      "id": 16,
+      "type": "timeseries",
+      "title": "kubepods.slice memory (all pods on the node)",
+      "description": "",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 55
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "limit"
+            },
+            "properties": [
+              {
+                "id": "custom.stacking",
+                "value": {
+                  "mode": "none",
+                  "group": "A"
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    10
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "min",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "container_memory_usage_bytes{node=~\"$node\", id=\"/kubelet.slice/kubelet-kubepods.slice\"}",
+          "legendFormat": "usage (memory.current)"
+        },
+        {
+          "refId": "B",
+          "expr": "container_memory_working_set_bytes{node=~\"$node\", id=\"/kubelet.slice/kubelet-kubepods.slice\"}",
+          "legendFormat": "working set"
+        },
+        {
+          "refId": "C",
+          "expr": "container_memory_rss{node=~\"$node\", id=\"/kubelet.slice/kubelet-kubepods.slice\"}",
+          "legendFormat": "rss (anon)"
+        },
+        {
+          "refId": "D",
+          "expr": "container_memory_cache{node=~\"$node\", id=\"/kubelet.slice/kubelet-kubepods.slice\"}",
+          "legendFormat": "cache (file)"
+        },
+        {
+          "refId": "E",
+          "expr": "container_memory_swap{node=~\"$node\", id=\"/kubelet.slice/kubelet-kubepods.slice\"}",
+          "legendFormat": "swap"
+        },
+        {
+          "refId": "F",
+          "expr": "kube_node_status_allocatable{node=~\"$node\", resource=\"memory\"}",
+          "legendFormat": "limit"
+        }
+      ]
+    },
+    {
+      "id": 17,
+      "type": "timeseries",
+      "title": "Node memory pressure (PSI, cAdvisor)",
+      "description": "",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 63
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "min",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(container_pressure_memory_stalled_seconds_total{node=~\"$node\", id=\"/kubelet.slice/kubelet-kubepods.slice\"}[1m])",
+          "legendFormat": "kubepods stalled (full)"
+        },
+        {
+          "refId": "B",
+          "expr": "rate(container_pressure_memory_waiting_seconds_total{node=~\"$node\", id=\"/kubelet.slice/kubelet-kubepods.slice\"}[1m])",
+          "legendFormat": "kubepods waiting (some)"
+        },
+        {
+          "refId": "C",
+          "expr": "rate(container_pressure_memory_stalled_seconds_total{node=~\"$node\", id=\"/\"}[1m])",
+          "legendFormat": "node stalled (full)"
+        }
+      ]
+    },
+    {
+      "id": 18,
+      "type": "timeseries",
+      "title": "Node memory failures (reclaim hitting the limit)",
+      "description": "",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 63
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "min",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(container_memory_failures_total{node=~\"$node\", id=\"/kubelet.slice/kubelet-kubepods.slice\"}[1m])",
+          "legendFormat": "{{failure_type}} {{scope}}"
+        }
+      ]
+    },
+    {
+      "id": 19,
+      "type": "timeseries",
+      "title": "Whole kind node container (cgroup root of the node)",
+      "description": "kubepods plus kubelet, containerd and systemd of the apps node.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 71
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "min",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "container_memory_usage_bytes{node=~\"$node\", id=\"/\"}",
+          "legendFormat": "usage"
+        },
+        {
+          "refId": "B",
+          "expr": "container_memory_rss{node=~\"$node\", id=\"/\"}",
+          "legendFormat": "rss (anon)"
+        },
+        {
+          "refId": "C",
+          "expr": "container_memory_cache{node=~\"$node\", id=\"/\"}",
+          "legendFormat": "cache (file)"
+        },
+        {
+          "refId": "D",
+          "expr": "container_memory_swap{node=~\"$node\", id=\"/\"}",
+          "legendFormat": "swap"
+        }
+      ]
+    },
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "Host kernel (node-exporter; shared by all kind nodes)",
+      "description": "kind nodes see the host /proc/meminfo, so this is the whole host, not the apps node.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 71
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "min",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes",
+          "legendFormat": "used"
+        },
+        {
+          "refId": "B",
+          "expr": "node_memory_Active_anon_bytes + node_memory_Inactive_anon_bytes",
+          "legendFormat": "anon (non-swapped)"
+        },
+        {
+          "refId": "C",
+          "expr": "node_memory_SwapTotal_bytes - node_memory_SwapFree_bytes",
+          "legendFormat": "swapped"
+        },
+        {
+          "refId": "D",
+          "expr": "node_memory_Cached_bytes",
+          "legendFormat": "page cache"
+        }
+      ]
+    }
+  ]
+}

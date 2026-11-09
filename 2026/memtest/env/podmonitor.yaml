@@ -1,0 +1,15 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: memtest
+  namespace: memtest
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: memtest
+  podMetricsEndpoints:
+  - port: metrics
+    interval: 5s
+    relabelings:
+    - targetLabel: job
+      replacement: memtest
